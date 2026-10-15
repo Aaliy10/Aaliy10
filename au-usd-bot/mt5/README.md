@@ -1,9 +1,15 @@
 # aubot for MetaTrader 5
 
-`AuBot.mq5` is the aubot strategy as a MetaTrader 5 **Expert Advisor** (EA).
-It trades whatever symbol's chart you attach it to: **XAUUSD (gold)**, **AUDUSD**,
-or your broker's name for them (`GOLD`, `XAUUSD.m`, ...). It sends trade alerts to
-the **MT5 phone app**.
+Two files, which you can use together or separately:
+
+- **`AuBot.mq5`**, an **Expert Advisor** (EA) that trades the aubot strategy
+  automatically and sends trade alerts to the **MT5 phone app**.
+- **`AuPilot.mq5`**, an **indicator** that shows the strategy on your chart: the
+  moving averages, arrows at every past signal, and a live panel saying what the
+  strategy sees right now. It never places trades. See [AuPilot](#aupilot-signal-dashboard).
+
+Both work on whatever symbol's chart you attach them to: **XAUUSD (gold)**,
+**AUDUSD**, or your broker's name for them (`GOLD`, `XAUUSD.m`, ...).
 
 > **Risk warning.** This can lose money. No strategy here is proven profitable.
 > Backtest it, then run it on a **demo account** for weeks before even considering
@@ -27,15 +33,15 @@ Same rules as the Python bot, checked once per closed candle (1 hour by default)
 
 1. Install **MetaTrader 5** from your broker (or metatrader5.com) and open a
    **demo account**. MT5 runs on Windows, and on Mac through MetaQuotes' Mac installer.
-2. In MT5: **File → Open Data Folder**, then open **MQL5 → Experts** and copy
-   `AuBot.mq5` into it.
-3. Press **F4** to open MetaEditor, open `AuBot.mq5`, and press **F7** (Compile).
+2. In MT5: **File → Open Data Folder**. Copy `AuBot.mq5` into **MQL5 → Experts**,
+   and `AuPilot.mq5` into **MQL5 → Indicators**.
+3. Press **F4** to open MetaEditor. Open each file and press **F7** (Compile).
    The bottom panel should say `0 errors`.
-4. Back in MT5, open the **Navigator** (Ctrl+N). Under **Expert Advisors**,
-   right-click → **Refresh**, and `AuBot` appears.
+4. Back in MT5, open the **Navigator** (Ctrl+N) and right-click → **Refresh**.
+   `AuBot` appears under **Expert Advisors** and `AuPilot` under **Indicators**.
 
-This file hasn't been compiled yet (MT5 isn't available where it was written).
-If MetaEditor shows errors, copy the error lines and they can be fixed quickly.
+These files haven't been compiled yet (MT5 isn't available where they were
+written). If MetaEditor shows errors, copy the error lines and they can be fixed quickly.
 
 ## 2. Backtest (Strategy Tester)
 
@@ -55,6 +61,40 @@ If MetaEditor shows errors, copy the error lines and they can be fixed quickly.
 
 The Experts tab at the bottom shows `aubot started ...`. On startup the EA waits for
 the next candle to close before acting, so it never trades on an old signal.
+
+## AuPilot: signal dashboard
+
+Drag `AuPilot` from **Navigator → Indicators** onto an **H1** chart. It draws:
+
+- the **20 EMA** (blue), **50 EMA** (orange) and **200 EMA** (grey, thicker)
+- a **green arrow** under every candle that gave a buy signal, and a **red arrow**
+  above every sell signal, so you can scroll back and see how past signals played out
+- a **panel** in the top-left corner, updated every tick. For example:
+
+```
+AuPilot  XAUUSD H1
+Trend    UP    price above 200 EMA (buys only)
+20/50    20 above 50 for 1 candle
+RSI      58.4  neutral
+ATR      14.29  (stop 2.0x, target 3.0x)
+Signal   BUY on the last closed candle
+Plan     entry ~4174.80  stop 4146.22  target 4217.67
+Size     0.03 lots risks 85.74 USD (0.9%)
+Last     this one, closed at 4174.44
+Rules only, not a prediction. Many signals lose.
+```
+
+(Example layout; the numbers are made up.) Most of the time the Signal line says
+**none**, which is normal: crossovers that pass every filter are rare.
+
+When a candle closes with a new signal, AuPilot sends a pop-up and a phone push alert
+(both can be turned off in its **Inputs**). The arrow sits under the candle that
+produced the signal; AuBot, if it's running, enters at the start of the next candle.
+If you run both on the same chart you'll get two alerts per trade (AuPilot's signal
+and AuBot's order), so you may want to turn off AuPilot's push alerts.
+
+Keep AuPilot's strategy inputs the same as AuBot's, or the arrows won't match the
+EA's trades.
 
 ## 4. Phone alerts
 
