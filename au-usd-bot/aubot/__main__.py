@@ -1,13 +1,15 @@
-"""Command line interface: `python -m aubot {backtest,fetch,run}`."""
+"""Command line interface: `python -m aubot {backtest,fetch,run,telegram}`."""
 from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 
 from .backtest import run_backtest
 from .config import RiskParams, StrategyParams, get_instrument, load_dotenv
 from .data import load_csv, save_csv, synthetic_candles
+from .notify import NullNotifier, TelegramNotifier, find_chat_ids
 
 GRANULARITIES = ["M1", "M5", "M15", "M30", "H1", "H2", "H4", "H6", "H8", "H12", "D"]
 
@@ -85,14 +87,50 @@ def cmd_run(args: argparse.Namespace) -> int:
     strategy, risk = _params(args)
     client = OandaClient.from_env(environment)
     nav = client.nav()  # fail fast on bad credentials instead of retrying forever
-    logging.getLogger("aubot").info("Connected to OANDA %s account %s (NAV %.2f)",
-                                    environment, client.account_id, nav)
+    log = logging.getLogger("aubot")
+    log.info("Connected to OANDA %s account %s (NAV %.2f)", environment, client.account_id, nav)
 
-    bot = TradingBot(client, instrument, strategy, risk, args.granularity, dry_run=args.dry_run)
+    notifier = TelegramNotifier.from_env()
+    if notifier:
+        log.info("Telegram alerts on")
+    else:
+        log.info("Telegram alerts off (set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to enable)")
+        notifier = NullNotifier()
+    mode = "dry run, no orders" if args.dry_run else f"{environment} account"
+    notifier.send(f"🤖 aubot started\n{instrument.label} · {args.granularity} candles · {mode}\n"
+                  f"Account value {nav:,.2f}")
+
+    bot = TradingBot(client, instrument, strategy, risk, args.granularity,
+                     dry_run=args.dry_run, notifier=notifier)
     try:
         bot.run(poll_seconds=args.poll)
     except KeyboardInterrupt:
-        logging.getLogger("aubot").info("Stopped (open positions keep their stop-loss/take-profit)")
+        log.info("Stopped (open positions keep their stop-loss/take-profit)")
+        notifier.send("⏹ aubot stopped. Open trades keep their stop-loss and take-profit on OANDA.")
+    return 0
+
+
+def cmd_telegram(args: argparse.Namespace) -> int:
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    if not token:
+        raise ValueError("Set TELEGRAM_BOT_TOKEN in .env first (create a bot with @BotFather in Telegram)")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    if not chat_id:
+        chats = find_chat_ids(token)
+        if not chats:
+            print("No messages found. In Telegram, open your new bot, send it any message "
+                  "(e.g. hi), then run this command again.")
+            return 1
+        print("Found these chats. Add the line for yours to .env:\n")
+        for found_id, name in chats:
+            print(f"  TELEGRAM_CHAT_ID={found_id}    ({name})")
+        print("\nThen run `python -m aubot telegram` again to send a test message.")
+        return 0
+    if not TelegramNotifier(token, chat_id).send("✅ aubot alerts are working. "
+                                                "You'll get a message here for every trade."):
+        print("Test message failed; see the warning above.", file=sys.stderr)
+        return 1
+    print("Test message sent. Check Telegram on your phone.")
     return 0
 
 
@@ -128,6 +166,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--live", action="store_true", help="use the real-money OANDA account")
     run.add_argument("--i-understand-the-risks", action="store_true", help="required together with --live")
     run.set_defaults(func=cmd_run)
+
+    tg = sub.add_parser("telegram", help="set up and test Telegram phone alerts")
+    tg.set_defaults(func=cmd_telegram)
     return parser
 
 

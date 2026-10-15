@@ -9,6 +9,10 @@ It can:
 - **fetch** historical candles from OANDA to CSV
 - **run** live against an OANDA account: **practice (paper money) by default**
 
+**Using MetaTrader 5?** The same strategy is available as an MT5 Expert Advisor
+with phone push alerts, plus an on-chart signal dashboard (AuPilot). See
+[`mt5/README.md`](mt5/README.md).
+
 > **Risk warning.** This is educational software, not financial advice. Leveraged
 > forex/gold trading can lose more than you expect, quickly. No strategy here is
 > proven profitable. Backtest on real data, then run it on a practice account for
@@ -107,6 +111,31 @@ Real money, only after long practice testing:
 python -m aubot run --live --i-understand-the-risks
 ```
 
+## 4. Phone alerts (Telegram)
+
+The bot can message your phone through a Telegram bot that you create (free):
+
+1. In Telegram, open **@BotFather**, send `/newbot`, and pick a name. BotFather
+   replies with a **token** like `123456789:AAF...`.
+2. Add it to `.env` as `TELEGRAM_BOT_TOKEN=...`.
+3. Open your new bot in Telegram (BotFather sends a link), tap **Start**, and send it
+   any message, e.g. `hi`.
+4. Run `python -m aubot telegram`. It prints a `TELEGRAM_CHAT_ID=...` line; add it
+   to `.env`.
+5. Run `python -m aubot telegram` again to send a test message to your phone.
+
+From then on, `python -m aubot run` messages you when:
+
+- the bot starts or stops
+- it opens a trade (direction, size, price, stop, target and amount at risk)
+- a trade closes, by opposite crossover or by OANDA's stop-loss / take-profit
+  (checked every poll, so within about 30 seconds), with its profit or loss
+- an order fails, the daily loss limit kicks in, or the bot keeps failing
+  (e.g. lost internet) and later recovers
+
+Alerts are skipped if Telegram is not set up, and a failed alert never stops trading.
+Keep the token private: anyone with it can send messages as your bot.
+
 ## Project layout
 
 ```
@@ -119,6 +148,8 @@ aubot/
   data.py        CSV loading and synthetic data
   oanda.py       OANDA v20 REST client
   live.py        live trading loop
+  notify.py      Telegram phone alerts
   __main__.py    command line interface
 tests/           unit tests (python -m unittest discover -s tests)
+mt5/             MetaTrader 5 version: AuBot.mq5 (Expert Advisor), AuPilot.mq5 (signal dashboard)
 ```
