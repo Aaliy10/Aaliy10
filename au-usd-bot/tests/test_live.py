@@ -19,6 +19,8 @@ class FakeBroker:
         self.pos = 0
         self.orders = []
         self.closes = []
+        self.closed_trades = []
+        self.order_error = None
 
     def new_bar(self):
         t = self.frame.index[-1] + pd.Timedelta(hours=1)
@@ -33,7 +35,12 @@ class FakeBroker:
     def position(self, instrument):
         return self.pos
 
+    def last_closed_trade(self, instrument):
+        return self.closed_trades[-1] if self.closed_trades else None
+
     def market_order(self, instrument, units, stop_loss, take_profit, precision):
+        if self.order_error:
+            raise self.order_error
         self.orders.append((instrument, units, stop_loss, take_profit, precision))
         self.pos = units
         return {}
@@ -131,6 +138,114 @@ class TradingBotTest(unittest.TestCase):
         self.assertEqual(self.step_with(entry=1), [])
 
 
+class FakeNotifier:
+    def __init__(self):
+        self.messages = []
+
+    def send(self, text):
+        self.messages.append(text)
+        return True
+
+
+class AlertTest(unittest.TestCase):
+    def setUp(self):
+        self.broker = FakeBroker()
+        self.notifier = FakeNotifier()
+        self.bot = TradingBot(self.broker, AUD, notifier=self.notifier)
+
+    def step_with(self, bot=None, **signals):
+        with mock.patch("aubot.live.compute_signals", fake_signals(**signals)):
+            return (bot or self.bot).step()
+
+    def prime(self, bot=None):
+        self.step_with(bot)
+        self.broker.new_bar()
+
+    def test_entry_alert(self):
+        self.prime()
+        self.step_with(entry=1)
+        self.assertEqual(self.notifier.messages, [
+            "🟢 BUY AUD/USD\n25,000 units @ ~0.66000\nStop 0.65600 · Target 0.66600\n"
+            "Risk ≈ 100.00 USD (1.0% of account)"])
+
+    def test_stop_or_target_close_is_reported_between_bars(self):
+        self.prime()
+        self.step_with(entry=1)
+        self.broker.closed_trades.append({"realizedPL": "-100.0"})
+        self.broker.pos = 0  # OANDA's stop-loss closed the trade
+        self.step_with()     # same candle: only the position check runs
+        self.assertEqual(self.notifier.messages[-1],
+                         "❌ AUD/USD long closed (stop-loss, take-profit or manual)\nP&L: -100.00 USD")
+        count = len(self.notifier.messages)
+        self.step_with()
+        self.assertEqual(len(self.notifier.messages), count)  # reported once
+
+    def test_signal_close_alert_has_pnl_and_no_duplicate(self):
+        self.prime()
+        self.broker.pos = 25_000
+        self.broker.closed_trades.append({"realizedPL": "55.5"})
+        self.step_with(exit_long=True)
+        self.assertEqual(self.notifier.messages,
+                         ["✅ Closed AUD/USD long (opposite crossover)\nP&L: +55.50 USD"])
+        self.step_with()
+        self.assertEqual(len(self.notifier.messages), 1)
+
+    def test_close_without_pnl_lookup(self):
+        self.prime()
+        self.broker.pos = 25_000
+        self.step_with(exit_long=True)
+        self.assertEqual(self.notifier.messages, ["⏹ Closed AUD/USD long (opposite crossover)"])
+
+    def test_existing_position_at_startup_is_watched(self):
+        self.broker.pos = -3_000
+        self.step_with()  # primes and records the open short
+        self.broker.pos = 0
+        self.step_with()
+        self.assertIn("AUD/USD short closed", self.notifier.messages[-1])
+
+    def test_dry_run_alerts_say_would(self):
+        bot = TradingBot(self.broker, AUD, dry_run=True, notifier=self.notifier)
+        self.prime(bot)
+        self.step_with(bot, entry=-1)
+        self.assertTrue(self.notifier.messages[-1].startswith("[dry run] Would 🔴 SELL AUD/USD"))
+        self.step_with(bot)
+        self.assertEqual(len(self.notifier.messages), 1)
+
+    def test_order_failure_alerts_and_raises(self):
+        self.prime()
+        self.broker.order_error = OandaError("Order cancelled by OANDA: INSUFFICIENT_MARGIN")
+        with self.assertRaises(OandaError):
+            self.step_with(entry=1)
+        self.assertEqual(self.notifier.messages,
+                         ["⚠️ AUD/USD long order failed: Order cancelled by OANDA: INSUFFICIENT_MARGIN"])
+
+    def test_daily_loss_alert_sent_once_per_day(self):
+        self.prime()
+        self.step_with()  # records the day's starting NAV of 10,000
+        self.broker.nav_value = 9_650.0
+        for _ in range(2):
+            self.broker.new_bar()
+            self.step_with(entry=1)
+        self.assertEqual(self.notifier.messages,
+                         ["⚠️ Daily loss limit hit (-3.5% today). No new trades until tomorrow (UTC)."])
+
+    def test_run_loop_alerts_on_repeated_failure_and_recovery(self):
+        self.bot.step = mock.Mock(side_effect=[RuntimeError("boom")] * 3 + [[], []])
+        sleeps = []
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+            if len(sleeps) == 5:
+                raise KeyboardInterrupt
+
+        with self.assertRaises(KeyboardInterrupt), self.assertLogs("aubot", "ERROR"):
+            self.bot.run(poll_seconds=30, sleep=sleep)
+        self.assertEqual(self.notifier.messages, [
+            "⚠️ aubot has failed 3 times in a row: boom\nStill retrying every 30s.",
+            "✅ aubot is working again",
+        ])
+
+
 class FakeResponse:
     def __init__(self, body, status=200):
         self.body, self.status_code = body, status
@@ -206,6 +321,15 @@ class OandaClientTest(unittest.TestCase):
         client, _ = self.client(FakeResponse(body), FakeResponse({"positions": []}))
         self.assertEqual(client.position("AUD_USD"), -3000)
         self.assertEqual(client.position("AUD_USD"), 0)
+
+    def test_last_closed_trade(self):
+        client, session = self.client(FakeResponse({"trades": [{"id": "7", "realizedPL": "-12.5"}]}),
+                                      FakeResponse({"trades": []}))
+        self.assertEqual(client.last_closed_trade("XAU_USD")["realizedPL"], "-12.5")
+        method, url, kwargs = session.calls[0]
+        self.assertTrue(url.endswith("/v3/accounts/001-1/trades"))
+        self.assertEqual(kwargs["params"], {"state": "CLOSED", "instrument": "XAU_USD", "count": 1})
+        self.assertIsNone(client.last_closed_trade("XAU_USD"))
 
     def test_close_position(self):
         client, session = self.client(FakeResponse({}))

@@ -109,6 +109,13 @@ class OandaClient:
                 return int(float(p["long"]["units"])) + int(float(p["short"]["units"]))
         return 0
 
+    def last_closed_trade(self, instrument: str) -> dict | None:
+        """Most recently closed trade for `instrument` (includes `realizedPL`), or None."""
+        body = self._request("GET", f"/v3/accounts/{self.account_id}/trades",
+                             params={"state": "CLOSED", "instrument": instrument, "count": 1})
+        trades = body.get("trades", [])
+        return trades[0] if trades else None
+
     # --- trading -----------------------------------------------------------
 
     def market_order(self, instrument: str, units: int, stop_loss: float,
