@@ -9,6 +9,9 @@ It can:
 - **fetch** historical candles from OANDA to CSV
 - **run** live against an OANDA account: **practice (paper money) by default**
 
+**Using MetaTrader 5?** The same strategy is available as an MT5 Expert Advisor
+with phone push alerts. See [`mt5/README.md`](mt5/README.md).
+
 > **Risk warning.** This is educational software, not financial advice. Leveraged
 > forex/gold trading can lose more than you expect, quickly. No strategy here is
 > proven profitable. Backtest on real data, then run it on a practice account for
@@ -147,4 +150,5 @@ aubot/
   notify.py      Telegram phone alerts
   __main__.py    command line interface
 tests/           unit tests (python -m unittest discover -s tests)
+mt5/             MetaTrader 5 Expert Advisor version (AuBot.mq5)
 ```
